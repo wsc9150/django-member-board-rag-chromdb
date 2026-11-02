@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+
+{% block content %}
+<style>
+  .rag-page {font-family:Arial,'Malgun Gothic',sans-serif;color:#1f2937;max-width:980px;margin:0 auto;padding:28px 20px 48px;}
+  .rag-page * {box-sizing:border-box;}
+  .rag-page .rag-hero {background:#172b4d;color:#fff;padding:26px 32px;border-radius:14px;}
+  .rag-page .rag-hero h1 {margin:0 0 8px;font-size:32px;color:#fff;}
+  .rag-page .rag-panel {background:#fff;padding:24px 28px;margin-top:18px;border:1px solid #e5e7eb;border-radius:14px;box-shadow:0 3px 14px #0001;}
+  .rag-page .rag-history {height:440px;overflow-y:auto;border:1px solid #ddd;border-radius:8px;padding:18px;background:#fff;}
+  .rag-page .rag-bubble {padding:12px 15px;border-radius:10px;margin:10px 0;white-space:pre-wrap;line-height:1.6;}
+  .rag-page .rag-user {background:#e6f0ff;margin-left:15%;}
+  .rag-page .rag-bot {background:#f1f3f5;margin-right:10%;white-space:normal;overflow-wrap:anywhere;}
+  .rag-page .rag-bot p {margin:0 0 10px;line-height:1.7;}
+  .rag-page .rag-bot p:last-child {margin-bottom:0;}
+  .rag-page .rag-bot ul,.rag-page .rag-bot ol {padding-left:23px;margin:8px 0;}
+  .rag-page .rag-bot li {margin-bottom:6px;line-height:1.65;}
+  .rag-page .rag-bot strong {font-weight:700;}
+  .rag-page .rag-bot h1,.rag-page .rag-bot h2,.rag-page .rag-bot h3 {margin:12px 0 8px;color:inherit;}
+  .rag-page .rag-bot pre {white-space:pre-wrap;overflow-wrap:anywhere;}
+  .rag-page .rag-bot a {overflow-wrap:anywhere;}
+  .rag-page .rag-row {display:flex;gap:10px;margin-top:14px;}
+  .rag-page .rag-question {flex:1;min-width:0;padding:13px;font-size:16px;border:1px solid #bbb;border-radius:8px;}
+  .rag-page .rag-send {padding:12px 22px;background:#174c87;color:#fff;border:0;border-radius:8px;cursor:pointer;}
+  .rag-page .rag-send:disabled {opacity:.5;cursor:wait;}
+  .rag-page .rag-meta {font-size:12px;color:#536274;margin:4px 0 14px;overflow-wrap:anywhere;}
+  .rag-page .rag-hint {font-size:14px;color:#6b7280;margin:0 0 16px;}
+  @media(max-width:600px){.rag-page{padding:16px 12px 32px}.rag-page .rag-hero{padding:20px}.rag-page .rag-hero h1{font-size:24px}.rag-page .rag-panel{padding:16px}.rag-page .rag-history{height:360px}.rag-page .rag-send{padding:12px 14px}}
+</style>
+
+<div class="rag-page">
+  <section class="rag-hero" aria-label="AI 검색 안내">
+    <h1>Agentic AI 통합 업무 지원</h1>
+    <div>Django · ChromaDB · OpenAI 임베딩 · PDF · 게시글 질의응답</div>
+  </section>
+  <section class="rag-panel" aria-label="AI 채팅">
+    <p class="rag-hint">예: 환불 정책 / 게시판에 등록된 답글 내용 / 세금계산서</p>
+    <div id="history" class="rag-history" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <form id="chatForm" class="rag-row">
+      {% csrf_token %}
+      <input id="question" class="rag-question" maxlength="3000" placeholder="질문을 입력한다" aria-label="질문" required autocomplete="off">
+      <button id="send" class="rag-send" type="submit">전송</button>
+    </form>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const historyBox = document.getElementById('history');
+  const form = document.getElementById('chatForm');
+  const input = document.getElementById('question');
+  const send = document.getElementById('send');
+  const csrfInput = form.querySelector('input[name="csrfmiddlewaretoken"]');
+
+  function add(text, cls, meta = '', safeHtml = null) {
+    const bubble = document.createElement('div');
+    bubble.className = 'rag-bubble rag-' + cls;
+    if (cls === 'bot' && typeof safeHtml === 'string') {
+      // answer_html은 서버에서 안전하게 정제된 HTML이어야 한다.
+      bubble.innerHTML = safeHtml;
+    } else {
+      bubble.textContent = String(text ?? '');
+    }
+    historyBox.appendChild(bubble);
+    if (meta) {
+      const detail = document.createElement('div');
+      detail.className = 'rag-meta';
+      detail.textContent = meta;
+      historyBox.appendChild(detail);
+    }
+    historyBox.scrollTop = historyBox.scrollHeight;
+  }
+
+  form.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const question = input.value.trim();
+    if (!question || send.disabled) return;
+    add(question, 'user');
+    input.value = '';
+    send.disabled = true;
+    try {
+      const response = await fetch('/rag/api/chat/', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrfInput ? csrfInput.value : ''
+        },
+        body: JSON.stringify({message: question})
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'HTTP ' + response.status);
+      const sources = (Array.isArray(data.sources) ? data.sources : []).map(function (source) {
+        return source.kind === 'board'
+          ? '게시글 #' + (source.board_id ?? '') + ' ' + (source.title ?? '')
+          : (source.display_source || source.source || '문서') + (source.page != null ? ' p.' + source.page : '');
+      }).join(' / ');
+      const status = data.status === 'excerpt' ? ' · 원문 발췌(LLM 미생성)'
+        : data.status === 'generated' ? ' · LLM 생성' : '';
+      const meta = '에이전트: ' + (data.agent || '알 수 없음') + status + (sources ? ' · 출처: ' + sources : '');
+      add(data.answer || '', 'bot', meta, data.answer_html);
+    } catch (error) {
+      add('오류: ' + error.message, 'bot');
+    } finally {
+      send.disabled = false;
+      input.focus();
+    }
+  });
+})();
+</script>
+{% endblock %}
